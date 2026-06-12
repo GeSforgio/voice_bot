@@ -1,6 +1,6 @@
 """
 🧱 Пиздун 2.0 — Discord бот-компаньон
-Переписано на PyCord 2.8.0 с когами
+Переписано на discord.py + voice_recv (Rapptz master)
 """
 
 import discord
@@ -9,6 +9,14 @@ from dotenv import load_dotenv
 from prompt_manager import PromptManager
 from tts_engine import TTSEngine
 import os
+import time
+import asyncio
+
+
+def log(tag: str, msg: str):
+    """Форматированный лог с таймстемпом"""
+    t = time.strftime("%H:%M:%S")
+    print(f"[{t}] [{tag}] {msg}")
 
 # === Токен ===
 load_dotenv()
@@ -33,12 +41,12 @@ bot.recordings: dict[int, dict] = {}  # активные записи: {guild_id
 # === Менеджер промптов ===
 bot.prompt_manager = PromptManager(prompts_dir="prompts")
 bot.prompt_manager.default_prompt = "rail"
-print(f"[OK] Загружено промптов: {len(bot.prompt_manager.prompts)}")
-print(f"     Дефолтный: {bot.prompt_manager.default_prompt}")
+log("OK", f"Загружено промптов: {len(bot.prompt_manager.prompts)}")
+log("", f"Дефолтный: {bot.prompt_manager.default_prompt}")
 
 # === TTS движок ===
 bot.tts_engine = TTSEngine()
-print(f"[OK] TTS движок: Edge TTS (по умолчанию)")
+log("OK", "TTS движок: Edge TTS (по умолчанию)")
 
 
 # ===== ЗАГРУЗКА КОГОВ =====
@@ -46,14 +54,38 @@ print(f"[OK] TTS движок: Edge TTS (по умолчанию)")
 @bot.event
 async def on_ready():
     """Бот зашёл на сервер — загружаем коги и говорим привет"""
-    print(f"[OK] Пиздун 2.0 в игре! Зашёл как {bot.user}")
-    print(f"     ID: {bot.user.id}")
-    print(f"     Серверов: {len(bot.guilds)}")
+    log("OK", f"Пиздун 2.0 в игре! Зашёл как {bot.user}")
+    log("", f"ID: {bot.user.id}")
+    log("", f"Серверов: {len(bot.guilds)}")
 
     # Статус бота
     await bot.change_presence(
         activity=discord.Game(name="Подпивасник | !хелп")
     )
+
+
+# ===== ЛОГГЕР КОМАНД =====!
+
+@bot.event
+async def on_command(ctx):
+    """Логировать каждый вызов команды"""
+    args = ctx.kwargs if ctx.kwargs else {}
+    args_str = f" {args}" if args else ""
+    log("CMD", f"{ctx.author.display_name}: !{ctx.command.name}{args_str}")
+
+
+@bot.event
+async def on_command_completion(ctx):
+    """Логировать успешное выполнение команды"""
+    log("CMD", f"✓ !{ctx.command.name}")
+
+
+@bot.event
+async def on_command_error(ctx, error):
+    """Логировать ошибки команд (кроме CommandNotFound — норм)"""
+    if isinstance(error, discord.ext.commands.CommandNotFound):
+        return  # Не засоряем лог неизвестными командами
+    log("CMD", f"✗ !{ctx.command.name} — {error}")
 
 
 @bot.event
@@ -71,18 +103,22 @@ async def on_message(message):
 
 
 # ===== ЗАПУСК =====
-if __name__ == "__main__":
+async def main():
+    """Асинхронный запуск бота (load_extension теперь async в discord.py master)"""
     # Загружаем коги
-    bot.load_extension("cogs.misc_cog")
-    bot.load_extension("cogs.ai_cog")
-    bot.load_extension("cogs.voice_cog")
-    bot.load_extension("cogs.prompts_cog")
-    print("[OK] Коги загружены!")
+    await bot.load_extension("cogs.misc_cog")
+    await bot.load_extension("cogs.ai_cog")
+    await bot.load_extension("cogs.voice_cog")
+    await bot.load_extension("cogs.prompts_cog")
+    log("OK", "Коги загружены!")
 
     if not TOKEN:
-        print("[ERROR] Токен не найден!")
-        print("   Добавь DISCORD_TOKEN=твой_токен в файл .env")
-        exit(1)
+        log("ERROR", "Токен не найден! Добавь DISCORD_TOKEN=твой_токен в файл .env")
+        return
 
-    print("[START] Запускаем Пиздуна 2.0...")
-    bot.run(TOKEN)
+    log("START", "Запускаем Пиздуна 2.0...")
+    await bot.start(TOKEN)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

@@ -100,5 +100,5 @@ class MiscCog(commands.Cog):
         self.bot.voice_only_users.discard(ctx.author.id)
         await ctx.send("**Пиздун:** Вас понял. Возвращаюсь в текстовый режим. 📝")
 
-def setup(bot):
-    bot.add_cog(MiscCog(bot))
+async def setup(bot):
+    await bot.add_cog(MiscCog(bot))

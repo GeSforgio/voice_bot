@@ -91,8 +91,8 @@ class AICog(commands.Cog):
                 response = self.ai_client.chat.completions.create(
                     model=ai_config.AI_MODEL,
                     messages=messages,
-                    max_tokens=1024,
-                    temperature=0.7,
+                    max_tokens=ai_config.AI_MAX_TOKENS_CHAT,
+                    temperature=ai_config.AI_TEMPERATURE,
                 )
 
                 answer = response.choices[0].message.content
@@ -119,5 +119,5 @@ class AICog(commands.Cog):
                 )
 
 
-def setup(bot):
-    bot.add_cog(AICog(bot))
+async def setup(bot):
+    await bot.add_cog(AICog(bot))

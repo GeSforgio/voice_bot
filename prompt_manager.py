@@ -74,7 +74,6 @@ class PromptManager:
         # Первый загруженный — по умолчанию
         if self.prompts and not self.default_prompt:
             self.default_prompt = list(self.prompts.keys())[0]
-            print(f"[OK] Промпт по умолчанию: {self.default_prompt}")
 
     # ===== API =====
 

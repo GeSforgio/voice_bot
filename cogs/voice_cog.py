@@ -184,6 +184,7 @@ class VoiceCog(commands.Cog):
             ],
             max_tokens=ai_config.AI_MAX_TOKENS_VOICE,
             temperature=ai_config.AI_TEMPERATURE,
+            extra_body={"thinking": {"type": "disabled"}}
         )
         return response.choices[0].message.content
 

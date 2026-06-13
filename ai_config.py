@@ -14,6 +14,6 @@ WHISPER_DEVICE = "cpu"         # cpu или cuda
 WHISPER_COMPUTE_TYPE = "int8"  # int8, float16, float32 (на CPU — int8, на CUDA — float16)
 
 # === AI Response ===
-AI_MAX_TOKENS_VOICE = 256      # макс токенов для голосовых ответов (!скажи, !дежурь, !слушай)
+AI_MAX_TOKENS_VOICE = 400    # макс токенов для голосовых ответов (!скажи, !дежурь, !слушай)
 AI_MAX_TOKENS_CHAT = 1024      # макс токенов для текстового чата (!чат)
-AI_TEMPERATURE = 0.7           # креативность: 0.0 = строго, 1.0 = креатив, 2.0 = безумие
+AI_TEMPERATURE = 0.8           # креативность: 0.0 = строго, 1.0 = креатив, 2.0 = безумие

@@ -46,7 +46,8 @@ log("", f"Дефолтный: {bot.prompt_manager.default_prompt}")
 
 # === TTS движок ===
 bot.tts_engine = TTSEngine()
-log("OK", "TTS движок: Edge TTS (по умолчанию)")
+engine_name = bot.tts_engine.active.capitalize()
+log("OK", f"TTS движок: {engine_name} (по умолчанию)")
 
 
 # ===== ЗАГРУЗКА КОГОВ =====

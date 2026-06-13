@@ -43,9 +43,9 @@ class TTSEngine:
     """Абстракция над TTS движками — можно переключать на лету"""
 
     def __init__(self):
-        self.active = "edge"
+        self.active = "silero"
         self.edge_voice = "ru-RU-DmitryNeural"
-        self.silero_voice = "aidar"
+        self.silero_voice = "eugene"
         self._silero_model = None
         self._silero_loaded = False
 

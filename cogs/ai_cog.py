@@ -93,6 +93,7 @@ class AICog(commands.Cog):
                     messages=messages,
                     max_tokens=ai_config.AI_MAX_TOKENS_CHAT,
                     temperature=ai_config.AI_TEMPERATURE,
+                    extra_body={"thinking": {"type": "disabled"}}
                 )
 
                 answer = response.choices[0].message.content

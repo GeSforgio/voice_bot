@@ -14,10 +14,11 @@ import asyncio
 import os
 import time
 import numpy as np
-from openai import OpenAI
 import ai_config
 import logging
 from stt_transcriber import Transcriber
+from cogs.llm_client import create_llm
+from cogs.llm_tools import TOOLS
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +27,19 @@ def _log(tag: str, msg: str):
     """Лог с таймстемпом для голосовых операций"""
     t = time.strftime("%H:%M:%S")
     print(f"[{t}] [{tag}] {msg}")
+
+
+def strip_markdown(text: str) -> str:
+    """Удалить markdown-разметку для TTS (чтобы не читал звёздочки и тэги)"""
+    import re
+    text = re.sub(r'\*\*(.+?)\*\*', r'\1', text)
+    text = re.sub(r'\*(.+?)\*', r'\1', text)
+    text = re.sub(r'__(.+?)__', r'\1', text)
+    text = re.sub(r'`(.+?)`', r'\1', text)
+    text = re.sub(r'\[(.+?)\]\(.+?\)', r'\1', text)
+    text = re.sub(r'^#+\s*', '', text, flags=re.MULTILINE)
+    text = re.sub(r'^>\s*', '', text, flags=re.MULTILINE)
+    return text.strip()
 
 
 # =====================================================================
@@ -125,10 +139,8 @@ class VoiceCog(commands.Cog):
 
     def __init__(self, bot):
         self.bot = bot
-        self.ai_client = OpenAI(
-            api_key=ai_config.AI_API_KEY,
-            base_url=ai_config.AI_ENDPOINT,
-        )
+        self.llm = create_llm(max_tokens=ai_config.AI_MAX_TOKENS_VOICE)
+        self.llm_with_tools = self.llm.bind_tools(TOOLS)
         # Transcriber — ленивая загрузка whisper при первом вызове
         self.transcriber = Transcriber(
             model_size=ai_config.WHISPER_MODEL,
@@ -141,13 +153,18 @@ class VoiceCog(commands.Cog):
     # ===================== УТИЛИТЫ =====================
 
     async def _ensure_voice(self, ctx) -> discord.VoiceClient:
-        """Подключиться к голосовому каналу пользователя"""
+        """Подключиться к голосовому каналу пользователя (всегда через VoiceRecvClient)"""
         if not ctx.author.voice:
             raise commands.UserInputError("Ты не в войсе, брат! Зайди в канал сначала.")
 
         vc = ctx.voice_client
         if vc and vc.is_connected():
-            if vc.channel.id != ctx.author.voice.channel.id:
+            # Если уже коннект есть — проверяем что он VoiceRecvClient
+            if not hasattr(vc, "listen"):
+                _log("VOICE", "Переподключаюсь через VoiceRecvClient...")
+                await vc.disconnect()
+                vc = await ctx.author.voice.channel.connect(cls=voice_recv.VoiceRecvClient)
+            elif vc.channel.id != ctx.author.voice.channel.id:
                 await vc.move_to(ctx.author.voice.channel)
             return vc
 
@@ -175,23 +192,55 @@ class VoiceCog(commands.Cog):
             return None
 
     async def _ask_deepseek(self, text: str, user_id: int = None) -> str:
-        """Отправить текст в DeepSeek и получить ответ"""
-        response = self.ai_client.chat.completions.create(
-            model=ai_config.AI_MODEL,
-            messages=[
-                {"role": "system", "content": self.bot.prompt_manager.get_prompt(user_id)},
-                {"role": "user", "content": text},
-            ],
-            max_tokens=ai_config.AI_MAX_TOKENS_VOICE,
-            temperature=ai_config.AI_TEMPERATURE,
-            extra_body={"thinking": {"type": "disabled"}}
+        """Отправить текст в DeepSeek через LangChain и получить ответ (с тулзами)"""
+        _log("TOOL", f"Запрос к DeepSeek: {text[:100]}...")
+        system_prompt = self.bot.prompt_manager.get_prompt(user_id)
+        system_prompt += (
+            "\n\nТы умеешь искать в интернете через web_search. "
+            "Если юзер просит найти инфу, ссылки, новости, погуглить, "
+            "проверить факты или показать топ сайтов — ОБЯЗАТЕЛЬНО используй web_search."
+            "\n\nТы умеешь заходить на сайты через read_url. "
+            "Если юзер просит зайти на сайт, открыть страницу, узнать рейтинг, "
+            "цену или информацию с конкретного сайта — ОБЯЗАТЕЛЬНО используй read_url."
+            "\n\nВАЖНО: Когда тебе возвращается результат из web_search или read_url — "
+            "ОТВЕЧАЙ ИСКЛЮЧИТЕЛЬНО НА ОСНОВЕ ЭТИХ ДАННЫХ. "
+            "Не выдумывай и не используй свои старые знания. "
+            "Результаты поиска — это единственный источник правды."
         )
-        return response.choices[0].message.content
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": text},
+        ]
+
+        response = await self.llm_with_tools.ainvoke(messages)
+
+        # Обработка tool calls
+        if hasattr(response, "tool_calls") and response.tool_calls:
+            _log("TOOL", f"DeepSeek вызвал {len(response.tool_calls)} тул(ов)")
+            messages.append(response.model_dump())
+            for tc in response.tool_calls:
+                _log("TOOL", f"→ {tc['name']}({tc['args']})")
+                tool_fn = next((t for t in TOOLS if t.name == tc["name"]), None)
+                if tool_fn:
+                    result = tool_fn.invoke(tc["args"])
+                    _log("TOOL", f"← результат ({len(str(result))} символов)")
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc["id"],
+                        "content": str(result),
+                    })
+            _log("TOOL", "Повторный запрос к DeepSeek с результатами...")
+            final = await self.llm.ainvoke(messages)
+            _log("TOOL", f"Ответ: {final.content[:100]}...")
+            return final.content
+
+        return response.content
 
     async def _say_in_voice(self, vc: discord.VoiceClient, text: str):
         """Сгенерировать TTS и проиграть в войс"""
         async def _play_tts():
-            tmp_path, _ = await self.bot.tts_engine.speak(text)
+            clean_text = strip_markdown(text)
+            tmp_path, _ = await self.bot.tts_engine.speak(clean_text)
 
             # Ждём пока закончится предыдущее (если играем)
             while vc.is_playing():
@@ -418,14 +467,16 @@ class VoiceCog(commands.Cog):
 
             if ctx.author.id in self.bot.voice_only_users:
                 # Только голос
-                await self._say_in_voice(vc, answer)
+                if ctx.author.id not in self.bot.text_only_users:
+                    await self._say_in_voice(vc, answer)
             else:
                 # Отправляем в чат и говорим в войс
                 await ctx.send(
                     f"👤 **{ctx.author.display_name}:** {text}\n"
                     f"**Пиздун:** {answer}"
                 )
-                await self._say_in_voice(vc, answer)
+                if ctx.author.id not in self.bot.text_only_users:
+                    await self._say_in_voice(vc, answer)
 
     # ===================== !дежурь / !отдыхай =====================
 
@@ -481,7 +532,8 @@ class VoiceCog(commands.Cog):
         try:
             answer = await self._ask_deepseek(cleaned, member.id)
             _log("DUTY", f"Ответ: {answer[:100]}")
-            await self._say_in_voice(vc, answer)
+            if member.id not in self.bot.text_only_users:
+                await self._say_in_voice(vc, answer)
         except Exception as e:
             _log("ERROR", f"Duty AI: {e}")
         finally:

@@ -44,18 +44,25 @@ class MiscCog(commands.Cog):
         )
         embed.add_field(
             name="🎙️ !слушай [сек]",
-            value="Запись голоса (потом !хват...",
+            value="Запись голоса (потом !хватит)",
             inline=False,
         )
         embed.add_field(name="⏹️ !хватит", value="Остановить и распознать", inline=False)
         embed.add_field(
             name="🛡️ !дежурь",
-            value="⛔ сломано DAVE",
+            value="Жду слово «пиздун» в войсе и отвечаю",
             inline=False,
         )
         embed.add_field(name="🚪 !выйди", value="Выгнать из войса", inline=False)
-        embed.add_field(name="🤫 !войс / !тихо", value="Только голос, без текста", inline=False)
-        embed.add_field(name="💬 !дублируй / !текст", value="Голос + текст в чат", inline=False)
+        embed.add_field(name="🤫 !тихо / !войс", value="Только голос, без текста", inline=False)
+        embed.add_field(name="💬 !текст / !дублируй", value="Голос + текст в чат", inline=False)
+        embed.add_field(name="🔇 !молчи / !mute", value="Только текст, без войса", inline=False)
+        embed.add_field(name="🔊 !говори", value="Вернуть голос в эфир", inline=False)
+        embed.add_field(
+            name="🎭 !промпты / !промпт",
+            value="Список персонажей / сменить",
+            inline=False,
+        )
         embed.set_footer(text="Работает на Пиве ⚡")
 
         await ctx.send(embed=embed)
@@ -92,13 +99,28 @@ class MiscCog(commands.Cog):
     async def voice_only(self, ctx):
         """🤫 Пиздун говорит только в войсе, в чат не пишет"""
         self.bot.voice_only_users.add(ctx.author.id)
+        self.bot.text_only_users.discard(ctx.author.id)
         await ctx.send("**Пиздун:** Приём. Работаю по голосу. В эфир не выхожу. 🎤")
 
     @commands.command(name="текст", aliases=["text", "дублируй"])
     async def text_mode(self, ctx):
         """💬 Пиздун пишет в чат + говорит в войс"""
         self.bot.voice_only_users.discard(ctx.author.id)
+        self.bot.text_only_users.discard(ctx.author.id)
         await ctx.send("**Пиздун:** Вас понял. Возвращаюсь в текстовый режим. 📝")
+
+    @commands.command(name="молчи", aliases=["mute", "nosound"])
+    async def text_only(self, ctx):
+        """🔇 Пиздун отвечает только текстом, без голоса в войс"""
+        self.bot.text_only_users.add(ctx.author.id)
+        self.bot.voice_only_users.discard(ctx.author.id)
+        await ctx.send("**Пиздун:** Принял. Работаю только текстом, молчу в эфире. 🔇")
+
+    @commands.command(name="говори", aliases=["unsound"])
+    async def unmute_voice(self, ctx):
+        """🔊 Пиздун снова говорит голосом"""
+        self.bot.text_only_users.discard(ctx.author.id)
+        await ctx.send("**Пиздун:** Вас понял. Возвращаю голос в эфир. 🔊")
 
 async def setup(bot):
     await bot.add_cog(MiscCog(bot))

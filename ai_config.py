@@ -8,6 +8,9 @@ AI_ENDPOINT = os.getenv("AI_ENDPOINT", "https://api.deepseek.com/v1")
 AI_MODEL = os.getenv("AI_MODEL", "deepseek-v4-flash")
 AI_API_KEY = os.getenv("AI_API_KEY", "")
 
+# === Поиск ===
+TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "")
+
 # === Whisper STT ===
 WHISPER_MODEL = "base"         # размер модели: tiny, base, small, medium, large-v3
 WHISPER_DEVICE = "cpu"         # cpu или cuda

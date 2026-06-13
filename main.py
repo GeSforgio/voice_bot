@@ -35,6 +35,7 @@ bot = commands.Bot(
 
 # === Глобальное состояние (доступно из когов) ===
 bot.voice_only_users: set[int] = set()  # кто включил режим «только голос»
+bot.text_only_users: set[int] = set()  # кто включил режим «только текст» (без войса)
 bot.duty_guilds: set[int] = set()  # какие гильдии в режиме дежурства
 bot.recordings: dict[int, dict] = {}  # активные записи: {guild_id: {sink, ctx, channel_id}}
 

@@ -6,24 +6,51 @@
 
 import discord
 from discord.ext import commands
-from openai import OpenAI
 import ai_config
 import os
 import asyncio
+import time
+from discord.ext import voice_recv
+from cogs.llm_client import create_llm
+from cogs.llm_tools import TOOLS
 
 # Максимум сообщений в истории диалога на пользователя
 MAX_HISTORY = 20
 
 
+def _log(tag: str, msg: str):
+    """Лог с таймстемпом"""
+    t = time.strftime("%H:%M:%S")
+    print(f"[{t}] [{tag}] {msg}")
+
+
+def strip_markdown(text: str) -> str:
+    """Удалить markdown-разметку для TTS (чтобы не читал звёздочки и тэги)"""
+    import re
+    # **жирный** → жирный
+    text = re.sub(r'\*\*(.+?)\*\*', r'\1', text)
+    # *курсив* → курсив
+    text = re.sub(r'\*(.+?)\*', r'\1', text)
+    # __подчёркнутый__ → подчёркнутый
+    text = re.sub(r'__(.+?)__', r'\1', text)
+    # `код` → код
+    text = re.sub(r'`(.+?)`', r'\1', text)
+    # [текст](ссылка) → текст
+    text = re.sub(r'\[(.+?)\]\(.+?\)', r'\1', text)
+    # # заголовки → убрать #
+    text = re.sub(r'^#+\s*', '', text, flags=re.MULTILINE)
+    # > цитаты → убрать >
+    text = re.sub(r'^>\s*', '', text, flags=re.MULTILINE)
+    return text.strip()
+
+
 class AICog(commands.Cog):
-    """AI-чат с DeepSeek через промпт солдата PUBG"""
+    """AI-чат с DeepSeek через LangChain с тулзами"""
 
     def __init__(self, bot):
         self.bot = bot
-        self.ai_client = OpenAI(
-            api_key=ai_config.AI_API_KEY,
-            base_url=ai_config.AI_ENDPOINT,
-        )
+        self.llm = create_llm(max_tokens=ai_config.AI_MAX_TOKENS_CHAT)
+        self.llm_with_tools = self.llm.bind_tools(TOOLS)
         # История диалогов: {user_id: [{"role": "user"/"assistant", "content": "..."}]}
         self.history: dict[int, list[dict]] = {}
 
@@ -44,14 +71,15 @@ class AICog(commands.Cog):
                 if vc.channel.id != ctx.author.voice.channel.id:
                     await vc.move_to(ctx.author.voice.channel)
             else:
-                vc = await ctx.author.voice.channel.connect()
+                vc = await ctx.author.voice.channel.connect(cls=voice_recv.VoiceRecvClient)
         except Exception as e:
             print(f"[TTS] Не смог подключиться к войсу: {e}")
             return False
 
         # Генерируем TTS и проигрываем
         try:
-            tmp_path, _ = await self.bot.tts_engine.speak(text)
+            clean_text = strip_markdown(text)
+            tmp_path, _ = await self.bot.tts_engine.speak(clean_text)
 
             while vc.is_playing():
                 await asyncio.sleep(0.5)
@@ -81,36 +109,103 @@ class AICog(commands.Cog):
             history = self.get_history(ctx.author.id)
 
             # Собираем сообщения: системный промпт + последние N из истории + новый вопрос
+            system_prompt = self.bot.prompt_manager.get_prompt(ctx.author.id)
+            system_prompt += (
+                "\n\nТы умеешь искать в интернете через web_search. "
+                "Если юзер просит найти инфу, ссылки, новости, погуглить, "
+                "проверить факты или показать топ сайтов — ОБЯЗАТЕЛЬНО используй web_search."
+                "\n\nТы умеешь заходить на сайты через read_url. "
+                "Если юзер просит зайти на сайт, открыть страницу, узнать рейтинг, "
+                "цену или информацию с конкретного сайта — ОБЯЗАТЕЛЬНО используй read_url."
+                "\n\nВАЖНО: Когда тебе возвращается результат из web_search или read_url — "
+                "ОТВЕЧАЙ ИСКЛЮЧИТЕЛЬНО НА ОСНОВЕ ЭТИХ ДАННЫХ. "
+                "Не выдумывай и не используй свои старые знания. "
+                "Результаты поиска — это единственный источник правды."
+                "\n\nТы можешь вызывать инструменты несколько раз, если это нужно для ответа."
+                "\nСейчас 2026 год"
+            )
             messages = [
-                {"role": "system", "content": self.bot.prompt_manager.get_prompt(ctx.author.id)},
+                {"role": "system", "content": system_prompt},
                 *history[-MAX_HISTORY:],
                 {"role": "user", "content": question},
             ]
 
             try:
-                response = self.ai_client.chat.completions.create(
-                    model=ai_config.AI_MODEL,
-                    messages=messages,
-                    max_tokens=ai_config.AI_MAX_TOKENS_CHAT,
-                    temperature=ai_config.AI_TEMPERATURE,
-                    extra_body={"thinking": {"type": "disabled"}}
-                )
+                MAX_TOOL_ROUNDS = 1
+                tool_rounds = 0
 
-                answer = response.choices[0].message.content
+                response = await self.llm_with_tools.ainvoke(messages)
+
+                # Многораундовый tool calling: DeepSeek может вызывать тулзы несколько раз
+                while (
+                    hasattr(response, "tool_calls")
+                    and response.tool_calls
+                    and tool_rounds < MAX_TOOL_ROUNDS
+                ):
+                    tool_rounds += 1
+                    _log("TOOL", f"Раунд {tool_rounds}: {len(response.tool_calls)} тул(ов)")
+                    messages.append(response.model_dump())
+
+                    any_called = False
+                    for tc in response.tool_calls:
+                        _log("TOOL", f"→ {tc['name']}({tc['args']})")
+                        tool_fn = next((t for t in TOOLS if t.name == tc["name"]), None)
+                        if tool_fn:
+                            result = tool_fn.invoke(tc["args"])
+                            _log("TOOL", f"← результат ({len(str(result))} символов)")
+                            messages.append({
+                                "role": "tool",
+                                "tool_call_id": tc["id"],
+                                "content": str(result),
+                            })
+                            any_called = True
+
+                    if not any_called:
+                        break
+
+                    # Проверяем качество последнего результата тулза
+                    last_tool = None
+                    for msg in reversed(messages):
+                        if msg.get("role") == "tool":
+                            last_tool = msg
+                            break
+                    if last_tool:
+                        content = last_tool.get("content", "")
+                        good = (
+                            len(content) > 200
+                            and "ничего не найдено" not in content.lower()
+                            and "ошибка" not in content.lower()
+                        )
+                        if good:
+                            _log("TOOL", "Результат хороший, дополнительный раунд не нужен")
+                            break
+
+                    # Снова с тулзами — DeepSeek может решить вызвать read_url как фолбэк
+                    response = await self.llm_with_tools.ainvoke(messages)
+
+                # Финальный проход
+                if tool_rounds > 0:
+                    _log("TOOL", f"Финальный ответ после {tool_rounds} раунд(ов) тулзов...")
+                    final = await self.llm.ainvoke(messages)
+                    answer = final.content
+                else:
+                    answer = response.content
 
                 # Сохраняем в историю
                 history.append({"role": "user", "content": question})
                 history.append({"role": "assistant", "content": answer})
 
-                # Отправляем текст в чат (если не voice-only режим)
+                # Отправляем текст в чат
                 if ctx.author.id not in self.bot.voice_only_users:
                     text_answer = answer
                     if len(text_answer) > 1900:
                         text_answer = text_answer[:1900] + "...\n\n*✅ ответ обрезан, был длиннее*"
                     await ctx.send(f"**Пиздун:** {text_answer}")
 
-                # Всегда пробуем сказать голосом если пользователь в войсе
-                voice_ok = await self._say_in_voice(ctx, answer)
+                # Пробуем сказать голосом
+                voice_ok = False
+                if ctx.author.id not in self.bot.text_only_users:
+                    voice_ok = await self._say_in_voice(ctx, answer)
 
             except Exception as e:
                 error_msg = str(e)[:150]

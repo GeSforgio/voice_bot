@@ -273,6 +273,13 @@ def _sign_normalize(text: str) -> str:
 def rule_normalize(text: str) -> str:
     """Нормализация текста правилами (без нейронки)"""
     original = text
+    # Татарские буквы → русские аналоги
+    text = text.replace('ә', 'э').replace('Ә', 'Э')
+    text = text.replace('ө', 'о').replace('Ө', 'О')
+    text = text.replace('ү', 'у').replace('Ү', 'У')
+    text = text.replace('һ', 'х').replace('Һ', 'Х')
+    text = text.replace('җ', 'ж').replace('Җ', 'Ж')
+    text = text.replace('ң', 'н').replace('Ң', 'Н')
     text = _expand_abbreviations(text)
     text = _expand_latin_word(text)
     text = _currency_normalize(text)

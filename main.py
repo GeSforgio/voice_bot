@@ -8,6 +8,7 @@ from discord.ext import commands
 from dotenv import load_dotenv
 from prompt_manager import PromptManager
 from tts_engine import TTSEngine
+from normalizer import Normalizer
 import os
 import time
 import asyncio
@@ -36,6 +37,7 @@ bot = commands.Bot(
 # === Глобальное состояние (доступно из когов) ===
 bot.voice_only_users: set[int] = set()  # кто включил режим «только голос»
 bot.text_only_users: set[int] = set()  # кто включил режим «только текст» (без войса)
+bot.normalization_disabled: set[int] = set()  # кто отключил нормализацию текста
 bot.duty_guilds: set[int] = set()  # какие гильдии в режиме дежурства
 bot.recordings: dict[int, dict] = {}  # активные записи: {guild_id: {sink, ctx, channel_id}}
 
@@ -49,6 +51,10 @@ log("", f"Дефолтный: {bot.prompt_manager.default_prompt}")
 bot.tts_engine = TTSEngine()
 engine_name = bot.tts_engine.active.capitalize()
 log("OK", f"TTS движок: {engine_name} (по умолчанию)")
+
+# === Нормалайзер текста ===
+bot.normalizer = Normalizer()
+log("OK", "Normalizer: rule-based (загрузится при первом использовании)")
 
 
 # ===== ЗАГРУЗКА КОГОВ =====

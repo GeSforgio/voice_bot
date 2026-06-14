@@ -22,47 +22,21 @@ class MiscCog(commands.Cog):
         embed = discord.Embed(
             title="🧱 Пиздун — Команды",
             description="Чё я умею, короче:",
-            color=0x00ff00,  # майнкрафт-зелёный
+            color=0x00ff00,
         )
-        embed.add_field(name="!хелп", value="Это вот сюда ты щас написал", inline=False)
-        embed.add_field(name="!пиздун", value="Пиздун что-то скажет", inline=False)
-        embed.add_field(name="!автор", value="Кто меня создал", inline=False)
-        embed.add_field(name="🧠 !чат [текст]", value="DeepSeek — отвечает текстом + голосом в войс", inline=False)
-        embed.add_field(
-            name="🎤 !скажи [текст]", value="Сказать текст голосом в войсе", inline=False
-        )
-        embed.add_field(
-            name="🎙️ !голос",
-            value=(
-                "Управление TTS:\n"
-                "`!голос` — статус\n"
-                "`!голос edge/silero` — движок\n"
-                "`!голос список` — голоса\n"
-                "`!голос voice [имя]` — выбрать"
-            ),
-            inline=False,
-        )
-        embed.add_field(
-            name="🎙️ !слушай [сек]",
-            value="Запись голоса (потом !хватит)",
-            inline=False,
-        )
-        embed.add_field(name="⏹️ !хватит", value="Остановить и распознать", inline=False)
-        embed.add_field(
-            name="🛡️ !дежурь",
-            value="Жду слово «пиздун» в войсе и отвечаю",
-            inline=False,
-        )
+        embed.add_field(name="🧠 !чат [текст]", value="DeepSeek AI — текст + голос в войс (с историей)", inline=False)
+        embed.add_field(name="🎤 !скажи [текст]", value="Сказать текст голосом в войсе", inline=False)
+        embed.add_field(name="🎙️ !голос", value="`edge/silero` — движок | `список` — голоса | `voice [имя]` — выбрать", inline=False)
+        embed.add_field(name="🎙️ !слушай [сек]", value="Запись голоса (2-60с), потом !хватит", inline=False)
+        embed.add_field(name="⏹️ !хватит", value="Остановить запись → распознать → AI ответ", inline=False)
+        embed.add_field(name="🛡️ !дежурь / !отдыхай", value="Слушает «пиздун» в войсе и отвечает / снять с дежурства", inline=False)
         embed.add_field(name="🚪 !выйди", value="Выгнать из войса", inline=False)
-        embed.add_field(name="🤫 !тихо / !войс", value="Только голос, без текста", inline=False)
-        embed.add_field(name="💬 !текст / !дублируй", value="Голос + текст в чат", inline=False)
-        embed.add_field(name="🔇 !молчи / !mute", value="Только текст, без войса", inline=False)
-        embed.add_field(name="🔊 !говори", value="Вернуть голос в эфир", inline=False)
-        embed.add_field(
-            name="🎭 !промпты / !промпт",
-            value="Список персонажей / сменить",
-            inline=False,
-        )
+        embed.add_field(name="🔇 !молчи / 🔊 !говори", value="Только текст / вернуть голос", inline=False)
+        embed.add_field(name="🤫 !тихо / 💬 !текст", value="Только голос / голос + текст", inline=False)
+        embed.add_field(name="📝 !норм", value="`вкл/выкл` — норм-я текста | `mode neural|rule` — движок", inline=False)
+        embed.add_field(name="🎭 !промпты / !промпт [имя]", value="Список персонажей / сменить / -релоад", inline=False)
+        embed.add_field(name="!пиздун", value="Рандомная фраза", inline=False)
+        embed.add_field(name="!автор", value="Кто создал", inline=False)
         embed.set_footer(text="Работает на Пиве ⚡")
 
         await ctx.send(embed=embed)
@@ -121,6 +95,59 @@ class MiscCog(commands.Cog):
         """🔊 Пиздун снова говорит голосом"""
         self.bot.text_only_users.discard(ctx.author.id)
         await ctx.send("**Пиздун:** Вас понял. Возвращаю голос в эфир. 🔊")
+
+    # ===== НОРМАЛИЗАЦИЯ =====
+
+    @commands.command(name="норм", aliases=["норматизация", "norm", "normalize"])
+    async def norm_toggle(self, ctx, action: str = None, value: str = None):
+        """📝 Управление нормализацией текста для TTS
+
+        !норм — показать статус
+        !норм вкл — включить нормализацию
+        !норм выкл — отключить
+        !норм mode neural — нейронная нормализация (RUNorm T5)
+        !норм mode rule — rule-based (регексы, быстрее)
+        """
+        uid = ctx.author.id
+
+        if not action:
+            status = "✅ вкл" if uid not in self.bot.normalization_disabled else "❌ выкл"
+            mode = self.bot.normalizer.mode
+            await ctx.send(
+                f"**📝 Нормализация текста:** {status}\n"
+                f"   Режим: {mode}\n"
+                f"   Помогает TTS правильно читать числа, валюты, "
+                f"телефоны и аббревиатуры.\n"
+                f"   `!норм вкл` / `!норм выкл` / `!норм mode neural|rule`"
+            )
+            return
+
+        if action == "mode":
+            if not value:
+                await ctx.send(f"**📝 Пиздун:** Режим: `{self.bot.normalizer.mode}`. Смени через `!норм mode neural` или `!норм mode rule`")
+                return
+            msg = self.bot.normalizer.set_mode(value)
+            await ctx.send(f"**📝 Пиздун:** {msg}")
+            return
+
+        if action in ("выкл", "off", "disable", "0"):
+            self.bot.normalization_disabled.add(uid)
+            await ctx.send(
+                "**📝 Пиздун:** Отключаю нормализацию. Буду читать как есть. "
+                "Цифры побуквенно, валюты сырыми. 😤"
+            )
+            return
+
+        if action in ("вкл", "on", "enable", "1"):
+            self.bot.normalization_disabled.discard(uid)
+            await ctx.send(
+                "**📝 Пиздун:** Включаю нормализацию! "
+                "«150 рублей» вместо «один пять ноль руб плюс». Красота. ✅"
+            )
+            return
+
+        await ctx.send("**Пиздун:** Не понял. Пиши `!норм вкл` / `!норм выкл` / `!норм mode neural|rule`")
+
 
 async def setup(bot):
     await bot.add_cog(MiscCog(bot))

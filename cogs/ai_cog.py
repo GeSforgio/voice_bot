@@ -44,6 +44,27 @@ def strip_markdown(text: str) -> str:
     return text.strip()
 
 
+def _chunk_text(text: str, max_len: int = 300) -> list[str]:
+    """Разбить текст на куски не длиннее max_len, по границам предложений"""
+    chunks = []
+    while len(text) > max_len:
+        cut = max_len
+        for sep in ('. ', '! ', '? ', '.\n', '!\n', '?\n', ', '):
+            idx = text.rfind(sep, 0, max_len)
+            if idx > cut // 2:
+                cut = idx + len(sep)
+                break
+        else:
+            idx = text.rfind(' ', 0, max_len)
+            if idx > cut // 2:
+                cut = idx + 1
+        chunks.append(text[:cut].strip())
+        text = text[cut:].strip()
+    if text:
+        chunks.append(text)
+    return chunks
+
+
 class AICog(commands.Cog):
     """AI-чат с DeepSeek через LangChain с тулзами"""
 
@@ -60,8 +81,8 @@ class AICog(commands.Cog):
             self.history[user_id] = []
         return self.history[user_id]
 
-    async def _say_in_voice(self, ctx, text: str):
-        """Сказать текст в войс-канал пользователя (если он в канале)"""
+    async def _say_in_voice(self, ctx, text: str, user_id: int = None):
+        """Сказать текст в войс-канал по чанкам (длинные тексты режем на куски)"""
         if not ctx.author.voice:
             return False
 
@@ -73,24 +94,36 @@ class AICog(commands.Cog):
             else:
                 vc = await ctx.author.voice.channel.connect(cls=voice_recv.VoiceRecvClient)
         except Exception as e:
-            print(f"[TTS] Не смог подключиться к войсу: {e}")
+            _log("TTS", f"Не смог подключиться к войсу: {e}")
             return False
 
-        # Генерируем TTS и проигрываем
         try:
             clean_text = strip_markdown(text)
-            tmp_path, _ = await self.bot.tts_engine.speak(clean_text)
+            chunks = _chunk_text(clean_text, max_len=300)
+            total = len(chunks)
 
-            while vc.is_playing():
-                await asyncio.sleep(0.5)
+            if total > 1:
+                _log("TTS", f"Текст {len(clean_text)} символов → {total} чанков")
 
-            vc.play(
-                discord.FFmpegPCMAudio(tmp_path),
-                after=lambda e: os.unlink(tmp_path) if os.path.exists(tmp_path) else None,
-            )
+            for i, chunk in enumerate(chunks, 1):
+                label = f"чанк {i}/{total}" if total > 1 else ""
+                # Нормализация текста (числа, валюты, телефоны → слова)
+                tts_chunk = chunk
+                if user_id and user_id not in self.bot.normalization_disabled:
+                    tts_chunk = self.bot.normalizer.norm(chunk)
+                _log("TTS", f"{label}: синтез ({len(tts_chunk)} символов)" if label else f"Начинаю озвучку ({len(tts_chunk)} символов)")
+                tmp_path, _ = await self.bot.tts_engine.speak(tts_chunk)
+
+                while vc.is_playing():
+                    await asyncio.sleep(0.3)
+
+                vc.play(
+                    discord.FFmpegPCMAudio(tmp_path),
+                    after=lambda e, path=tmp_path: os.unlink(path) if os.path.exists(path) else None,
+                )
             return True
         except Exception as e:
-            print(f"[TTS] Ошибка воспроизведения: {e}")
+            _log("TTS", f"Ошибка воспроизведения: {e}")
             return False
 
     # ===== !чат =====
@@ -113,6 +146,7 @@ class AICog(commands.Cog):
 
             # Промпт с описанием тулзов — только для раунда вызова инструментов
             tool_prompt = base_prompt + (
+                "\n\nСейчас 2026 год"
                 "\n\nДоступные инструменты:"
                 "\n- web_search — поиск в интернете (новости, ссылки, факты)"
                 "\n- read_url — чтение содержимого сайта по URL"
@@ -125,6 +159,7 @@ class AICog(commands.Cog):
             )
             # Чистый промпт без упоминания инструментов — для финального ответа
             clean_prompt = base_prompt + (
+                "\n\nСейчас 2026 год"
                 "\n\nЕсли тебе вернулись результаты поиска — "
                 "отвечай на основе этих данных. Не выдумывай."
             )
@@ -136,9 +171,12 @@ class AICog(commands.Cog):
             ]
 
             try:
+                t_pipeline = time.time()
                 MAX_TOOL_ROUNDS = 1
                 tool_rounds = 0
 
+                _log("AI", f"Запрос к DeepSeek: {question[:100]}...")
+                t_first = time.time()
                 response = await self.llm_with_tools.ainvoke(messages)
 
                 # Многораундовый tool calling: DeepSeek может вызывать тулзы несколько раз
@@ -148,7 +186,8 @@ class AICog(commands.Cog):
                     and tool_rounds < MAX_TOOL_ROUNDS
                 ):
                     tool_rounds += 1
-                    _log("TOOL", f"Раунд {tool_rounds}: {len(response.tool_calls)} тул(ов)")
+                    t_tool_round = time.time() - t_first
+                    _log("TOOL", f"Раунд {tool_rounds}: {len(response.tool_calls)} тул(ов) за {t_tool_round:.1f}с")
                     messages.append(response.model_dump())
 
                     any_called = False
@@ -193,14 +232,22 @@ class AICog(commands.Cog):
                     _log("TOOL", f"Финальный ответ после {tool_rounds} раунд(ов) тулзов...")
                     # Убираем из системного промпта упоминания инструментов — тулзов больше нет
                     messages[0] = {"role": "system", "content": clean_prompt}
+                    t_final = time.time()
                     final = await self.llm.ainvoke(messages)
+                    t_final_elapsed = time.time() - t_final
+                    _log("TOOL", f"DeepSeek: финальный ответ за {t_final_elapsed:.1f}с")
                     answer = final.content
                 else:
+                    t_elapsed = time.time() - t_first
+                    _log("AI", f"DeepSeek: ответил за {t_elapsed:.1f}с")
                     answer = response.content
 
                 # Сохраняем в историю
                 history.append({"role": "user", "content": question})
                 history.append({"role": "assistant", "content": answer})
+
+                t_total = time.time() - t_pipeline
+                _log("AI", f"Итого: {t_total:.1f}с | Длина ответа: {len(answer)} символов")
 
                 # Отправляем текст в чат
                 if ctx.author.id not in self.bot.voice_only_users:
@@ -212,7 +259,7 @@ class AICog(commands.Cog):
                 # Пробуем сказать голосом
                 voice_ok = False
                 if ctx.author.id not in self.bot.text_only_users:
-                    voice_ok = await self._say_in_voice(ctx, answer)
+                    voice_ok = await self._say_in_voice(ctx, answer, ctx.author.id)
 
             except Exception as e:
                 error_msg = str(e)[:150]

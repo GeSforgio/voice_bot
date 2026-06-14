@@ -15,6 +15,13 @@ import asyncio
 import tempfile
 import subprocess
 import sys
+import time
+
+
+def _log(tag: str, msg: str):
+    """Форматированный лог с таймстемпом"""
+    t = time.strftime("%H:%M:%S")
+    print(f"[{t}] [{tag}] {msg}")
 
 
 # ============================================================
@@ -142,17 +149,23 @@ class TTSEngine:
 
     async def _edge_generate(self, text: str) -> str:
         """Синтезировать через Edge TTS → вернуть путь к .mp3"""
+        t_start = time.time()
+        _log("TTS", f"Edge: начинаю синтез ({len(text)} символов)")
         ext = ".mp3"
         with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as f:
             tmp_path = f.name
         communicate = edge_tts.Communicate(text, self.edge_voice)
         await communicate.save(tmp_path)
+        elapsed = time.time() - t_start
+        _log("TTS", f"Edge: готов за {elapsed:.1f}с → {tmp_path}")
         return tmp_path
 
     # ===================== Silero TTS =====================
 
     async def _silero_generate(self, text: str) -> str:
         """Синтезировать через Silero → вернуть путь к .wav"""
+        t_start = time.time()
+        _log("TTS", f"Silero: начинаю синтез ({len(text)} символов)")
         ext = ".wav"
         with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as f:
             tmp_path = f.name
@@ -160,6 +173,8 @@ class TTSEngine:
         # Silero синхронный — запускаем в thread pool
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, self._silero_sync, text, tmp_path)
+        elapsed = time.time() - t_start
+        _log("TTS", f"Silero: готов за {elapsed:.1f}с → {tmp_path}")
         return tmp_path
 
     def _silero_sync(self, text: str, output_path: str):
@@ -191,6 +206,8 @@ class TTSEngine:
 
     def _install_and_load_silero(self):
         """Установить PyTorch (если нет) и загрузить модель Silero"""
+        t_start = time.time()
+        _log("TTS", "Silero: модель не загружена, загружаю...")
         # Проверяем PyTorch
         try:
             import torch  # noqa: F401
@@ -226,4 +243,5 @@ class TTSEngine:
         model.to(device)
         self._silero_model = model
         self._silero_loaded = True
-        print(f"[TTS] Silero загружен! Доступные голоса: {model.speakers}")
+        elapsed = time.time() - t_start
+        _log("TTS", f"Silero: модель загружена за {elapsed:.1f}с, голоса: {model.speakers}")

@@ -42,6 +42,29 @@ def strip_markdown(text: str) -> str:
     return text.strip()
 
 
+def _chunk_text(text: str, max_len: int = 300) -> list[str]:
+    """Разбить текст на куски не длиннее max_len, по границам предложений"""
+    chunks = []
+    while len(text) > max_len:
+        cut = max_len
+        # Ищем разделитель предложений в пределах max_len
+        for sep in ('. ', '! ', '? ', '.\n', '!\n', '?\n', ', '):
+            idx = text.rfind(sep, 0, max_len)
+            if idx > cut // 2:  # не режем слишком рано
+                cut = idx + len(sep)
+                break
+        else:
+            # Не нашли — режем по пробелу
+            idx = text.rfind(' ', 0, max_len)
+            if idx > cut // 2:
+                cut = idx + 1
+        chunks.append(text[:cut].strip())
+        text = text[cut:].strip()
+    if text:
+        chunks.append(text)
+    return chunks
+
+
 # =====================================================================
 # RecordingSink — кастомный sink для !слушай / !хватит
 # Записывает всех говорящих в буфер, отдаёт PCM по запросу
@@ -193,7 +216,8 @@ class VoiceCog(commands.Cog):
 
     async def _ask_deepseek(self, text: str, user_id: int = None) -> str:
         """Отправить текст в DeepSeek через LangChain и получить ответ (с тулзами)"""
-        _log("TOOL", f"Запрос к DeepSeek: {text[:100]}...")
+        t_pipeline = time.time()
+        _log("AI", f"Запрос к DeepSeek: {text[:100]}...")
         system_prompt = self.bot.prompt_manager.get_prompt(user_id)
         system_prompt += (
             "\n\nТы умеешь искать в интернете через web_search. "
@@ -212,11 +236,14 @@ class VoiceCog(commands.Cog):
             {"role": "user", "content": text},
         ]
 
+        t_first = time.time()
         response = await self.llm_with_tools.ainvoke(messages)
 
         # Обработка tool calls
         if hasattr(response, "tool_calls") and response.tool_calls:
-            _log("TOOL", f"DeepSeek вызвал {len(response.tool_calls)} тул(ов)")
+            t_tool_elapsed = time.time() - t_first
+            _log("TOOL", f"DeepSeek: первый ответ за {t_tool_elapsed:.1f}с, {len(response.tool_calls)} тул(ов)")
+            _log("AI", f"DeepSeek вызвал {len(response.tool_calls)} тул(ов)")
             messages.append(response.model_dump())
             for tc in response.tool_calls:
                 _log("TOOL", f"→ {tc['name']}({tc['args']})")
@@ -230,29 +257,59 @@ class VoiceCog(commands.Cog):
                         "content": str(result),
                     })
             _log("TOOL", "Повторный запрос к DeepSeek с результатами...")
+            t_final = time.time()
             final = await self.llm.ainvoke(messages)
-            _log("TOOL", f"Ответ: {final.content[:100]}...")
+            t_final_elapsed = time.time() - t_final
+            _log("TOOL", f"DeepSeek: финальный ответ за {t_final_elapsed:.1f}с")
+            _log("AI", f"Ответ: {final.content[:100]}...")
+            t_total = time.time() - t_pipeline
+            _log("AI", f"Итого: {t_total:.1f}с")
             return final.content
 
+        t_elapsed = time.time() - t_first
+        _log("AI", f"DeepSeek: ответил за {t_elapsed:.1f}с")
+        _log("AI", f"Ответ: {response.content[:100]}...")
+        t_total = time.time() - t_pipeline
+        _log("AI", f"Итого: {t_total:.1f}с")
         return response.content
 
-    async def _say_in_voice(self, vc: discord.VoiceClient, text: str):
-        """Сгенерировать TTS и проиграть в войс"""
-        async def _play_tts():
-            clean_text = strip_markdown(text)
-            tmp_path, _ = await self.bot.tts_engine.speak(clean_text)
+    async def _say_in_voice(self, vc: discord.VoiceClient, text: str, user_id: int = None):
+        """Сгенерировать TTS и проиграть в войс по чанкам (длинные тексты режем на куски)"""
+        async def _play_chunk(chunk: str, idx: int, total: int):
+            """Синтезировать и проиграть один чанк"""
+            clean = strip_markdown(chunk)
+            # Нормализация текста (числа, валюты, телефоны → слова)
+            if user_id and user_id not in self.bot.normalization_disabled:
+                clean = self.bot.normalizer.norm(clean)
+            label = f"чанк {idx}/{total}" if total > 1 else ""
+            t_tts = time.time()
+            _log("TTS", f"{label}: синтез ({len(clean)} символов)" if label else f"Начинаю озвучку ({len(clean)} символов)")
+            tmp_path, _ = await self.bot.tts_engine.speak(clean)
+            t_tts_elapsed = time.time() - t_tts
+            _log("TTS", f"{label}: синтез за {t_tts_elapsed:.1f}с" if label else f"Синтез за {t_tts_elapsed:.1f}с")
 
-            # Ждём пока закончится предыдущее (если играем)
+            # Ждём пока закончится предыдущее
             while vc.is_playing():
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(0.3)
 
             vc.play(
                 discord.FFmpegPCMAudio(tmp_path),
-                after=lambda e: os.unlink(tmp_path) if os.path.exists(tmp_path) else None,
+                after=lambda e, path=tmp_path: os.unlink(path) if os.path.exists(path) else None,
             )
 
         try:
-            await _play_tts()
+            clean_text = strip_markdown(text)
+            chunks = _chunk_text(clean_text, max_len=300)
+            total = len(chunks)
+
+            if total == 1:
+                await _play_chunk(chunks[0], 1, 1)
+                return
+
+            _log("TTS", f"Текст {len(clean_text)} символов → {total} чанков")
+            for i, chunk in enumerate(chunks, 1):
+                await _play_chunk(chunk, i, total)
+
         except Exception as e:
             _log("ERROR", f"TTS: {e}")
 
@@ -273,7 +330,7 @@ class VoiceCog(commands.Cog):
                 return
 
             await ctx.send(f"**Пиздун:** *по рации* «{text[:100]}»")
-            await self._say_in_voice(vc, text)
+            await self._say_in_voice(vc, text, ctx.author.id)
 
     # ===================== !голос =====================
 
@@ -442,9 +499,11 @@ class VoiceCog(commands.Cog):
              f"bytes={len(pcm_bytes)} ({audio_secs:.1f}s)")
 
         async with ctx.typing():
+            t_pipeline = time.time()
             t_start = time.time()
 
             # Распознаём речь через Transcriber
+            _log("REC", f"Начинаю обработку PCM ({len(pcm_bytes)} bytes, {audio_secs:.1f}s)")
             text = await self._transcribe(pcm_bytes)
 
             t_elapsed = time.time() - t_start
@@ -464,11 +523,12 @@ class VoiceCog(commands.Cog):
 
             # Отправляем в DeepSeek
             answer = await self._ask_deepseek(text, ctx.author.id)
+            t_ai = time.time() - t_pipeline
 
             if ctx.author.id in self.bot.voice_only_users:
                 # Только голос
                 if ctx.author.id not in self.bot.text_only_users:
-                    await self._say_in_voice(vc, answer)
+                    await self._say_in_voice(vc, answer, ctx.author.id)
             else:
                 # Отправляем в чат и говорим в войс
                 await ctx.send(
@@ -476,7 +536,10 @@ class VoiceCog(commands.Cog):
                     f"**Пиздун:** {answer}"
                 )
                 if ctx.author.id not in self.bot.text_only_users:
-                    await self._say_in_voice(vc, answer)
+                    await self._say_in_voice(vc, answer, ctx.author.id)
+
+            t_total = time.time() - t_pipeline
+            _log("REC", f"Итого: {t_total:.1f}с (стt: {t_elapsed:.1f}с, ai: {t_ai:.1f}с)")
 
     # ===================== !дежурь / !отдыхай =====================
 
@@ -492,6 +555,7 @@ class VoiceCog(commands.Cog):
 
     async def _handle_duty_utterance(self, member: discord.Member, pcm_bytes: bytes):
         """Обработка голосовой реплики в режиме дежурства"""
+        t_pipeline = time.time()
         guild_id = member.guild.id
         if guild_id not in self.bot.duty_guilds:
             return
@@ -533,10 +597,12 @@ class VoiceCog(commands.Cog):
             answer = await self._ask_deepseek(cleaned, member.id)
             _log("DUTY", f"Ответ: {answer[:100]}")
             if member.id not in self.bot.text_only_users:
-                await self._say_in_voice(vc, answer)
+                await self._say_in_voice(vc, answer, member.id)
         except Exception as e:
             _log("ERROR", f"Duty AI: {e}")
         finally:
+            t_total = time.time() - t_pipeline
+            _log("DUTY", f"Итого: {t_total:.1f}с")
             if rec and rec.get("sink"):
                 rec["sink"].paused = False
                 _log("DUTY", "Прослушивание возобновлено")

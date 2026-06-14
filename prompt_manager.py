@@ -5,8 +5,15 @@
 """
 
 import os
+import time
 import importlib
 import importlib.util
+
+
+def _log(tag: str, msg: str):
+    """Форматированный лог с таймстемпом"""
+    t = time.strftime("%H:%M:%S")
+    print(f"[{t}] [{tag}] {msg}")
 
 
 class PromptManagerError(Exception):
@@ -58,7 +65,7 @@ class PromptManager:
                 prompt = getattr(module, "PROMPT", None)
 
                 if not prompt:
-                    print(f"[WARN] Промпт {filename}: не найден PROMPT, пропускаю")
+                    _log("WARN", f"Промпт {filename}: не найден PROMPT, пропускаю")
                     continue
 
                 self.prompts[name] = {
@@ -66,10 +73,10 @@ class PromptManager:
                     "description": description,
                     "prompt": prompt,
                 }
-                print(f"[OK] Загружен промпт: {name} — {description}")
+                _log("OK", f"Загружен промпт: {name} — {description}")
 
             except Exception as e:
-                print(f"[ERROR] Не удалось загрузить {filename}: {e}")
+                _log("ERROR", f"Не удалось загрузить {filename}: {e}")
 
         # Первый загруженный — по умолчанию
         if self.prompts and not self.default_prompt:
@@ -110,6 +117,7 @@ class PromptManager:
 
         self.user_prompts[user_id] = name
         desc = self.prompts[name]["description"]
+        _log("CMD", f"Промпт сменён для user={user_id} на «{name}» ({desc})")
         return True, f"Промпт сменён на «{name}» ({desc})"
 
     def get_current_name(self, user_id: int | None = None) -> str:
@@ -130,3 +138,4 @@ class PromptManager:
         self.user_prompts.clear()
         self.default_prompt = None
         self._load_prompts()
+        _log("OK", f"Промпты перезагружены: {len(self.prompts)} загружено")

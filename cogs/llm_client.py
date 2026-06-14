@@ -15,5 +15,7 @@ def create_llm(max_tokens: int = None) -> ChatOpenAI:
         base_url=ai_config.AI_ENDPOINT,
         temperature=ai_config.AI_TEMPERATURE,
         max_tokens=max_tokens or ai_config.AI_MAX_TOKENS_CHAT,
+        timeout=60,
+        max_retries=0,
         extra_body={"thinking": {"type": "disabled"}},
     )

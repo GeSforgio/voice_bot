@@ -1,5 +1,5 @@
-discord.py>=2.8.0a
-discord-ext-voice-recv>=0.5.3a185
+discord.py>=2.8.0a #git+https://github.com/Rapptz/discord.py.git
+discord-ext-voice-recv>=0.5.3a185 # git+https://github.com/rdphillips7/discord-ext-voice-recv.git@main
 python-dotenv>=1.0.0
 edge-tts>=7.0.0
 langchain-openai>=0.1.0
@@ -19,3 +19,4 @@ razdel>=0.5.0
 
 # === Silero TTS (опционально — если не используешь Silero) ===
 # torch уже указан выше
+

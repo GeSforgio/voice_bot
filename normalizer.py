@@ -16,6 +16,7 @@
 import time
 import re
 import logging
+import threading
 
 logger = logging.getLogger(__name__)
 
@@ -256,6 +257,19 @@ def _percent_normalize(text: str) -> str:
     return text
 
 
+def _sign_normalize(text: str) -> str:
+    """Нормализовать знаки + и - перед числами и между ними"""
+    # +5 → плюс пять (но не в номерах телефонов)
+    text = re.sub(r'(?<!\w)\+(?=\d)', 'плюс ', text)
+    # -5 → минус пять (но не дефис в словах)
+    text = re.sub(r'(?<!\w)-(?=\d)', 'минус ', text)
+    # 5 + 3 → 5 плюс 3
+    text = re.sub(r'(\d)\s*\+\s*(?=\d)', r'\1 плюс ', text)
+    # 5 - 3 → 5 минус 3
+    text = re.sub(r'(\d)\s*-\s*(?=\d)', r'\1 минус ', text)
+    return text
+
+
 def rule_normalize(text: str) -> str:
     """Нормализация текста правилами (без нейронки)"""
     original = text
@@ -263,6 +277,7 @@ def rule_normalize(text: str) -> str:
     text = _expand_latin_word(text)
     text = _currency_normalize(text)
     text = _phone_normalize(text)
+    text = _sign_normalize(text)
     text = _percent_normalize(text)
     text = _number_normalize(text)
     # Убираем лишние пробелы
@@ -376,7 +391,7 @@ class Normalizer:
             _log("NORM", f"Rule-based нормализатор готов за {elapsed*1000:.0f}мс")
 
     def norm(self, text: str) -> str:
-        """Нормализовать текст для синтеза речи"""
+        """Нормализовать текст для синтеза речи (макс 10 секунд)"""
         if not text or not text.strip():
             return text
 
@@ -390,15 +405,40 @@ class Normalizer:
             except Exception as e:
                 _log("NORM", f"Neural error: {e} → fallback на rule-based")
                 self._neural = False
-                result = rule_normalize(text)
+                result = self._run_with_timeout(rule_normalize, text)
         else:
-            # Rule-based нормализация
-            result = rule_normalize(text)
+            # Rule-based нормализация с таймаутом 10с
+            result = self._run_with_timeout(rule_normalize, text)
 
         elapsed = time.time() - t_start
         if text != result:
             _log("NORM", f"«{text[:60]}...» → «{result[:60]}...» ({elapsed*1000:.0f}мс)")
         return result
+
+    def _run_with_timeout(self, func, text, timeout=10):
+        """Запустить функцию с таймаутом (чтобы регексы не вешали бота)"""
+        result = [None]
+        exception = [None]
+
+        def worker():
+            try:
+                result[0] = func(text)
+            except Exception as e:
+                exception[0] = e
+
+        t = threading.Thread(target=worker, daemon=True)
+        t.start()
+        t.join(timeout)
+
+        if t.is_alive():
+            _log("NORM", f"Таймаут {timeout}с! Отключаю проблемный паттерн...")
+            return text  # возвращаем как есть, не нормализованным
+
+        if exception[0]:
+            _log("NORM", f"Ошибка: {exception[0]}")
+            return text
+
+        return result[0]
 
     @property
     def mode(self) -> str:

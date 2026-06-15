@@ -208,7 +208,11 @@ class Transcriber:
                 wf.writeframes(samples.tobytes())
 
             result = model.transcribe(tmp_path, language="ru")
-            text = result.text.strip()
+            # result может быть dict или объект — универсально
+            if isinstance(result, dict):
+                text = result.get("text", "").strip()
+            else:
+                text = result.text.strip()
         except Exception as e:
             _log("WHISPER", f"whisper.cpp error: {e}")
             text = ""

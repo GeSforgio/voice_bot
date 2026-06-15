@@ -13,6 +13,7 @@ tavily-python>=0.3.0
 # === STT бэкенд (опционально — можно удалить если не нужно) ===
 # whisper-cpp-python — лёгкий C++ бэкенд для whisper, меньше RAM
 # pip install whisper-cpp-python
+# Импорт: from whisper_cpp_python import Whisper
 
 
 # === Text Normalizer (опционально — можно удалить если не нужно) ===

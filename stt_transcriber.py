@@ -74,10 +74,10 @@ class Transcriber:
             t_start = time.time()
             _log("WHISPER", f"Загружаю whisper.cpp ({self.whispercpp_model})...")
             try:
-                from whispercpp import Whisper
+                from whisper_cpp_python import Whisper
             except ImportError:
                 raise ImportError(
-                    "whisper.cpp не установлен. "
+                    "whisper_cpp_python не установлен. "
                     "Установи: pip install whisper-cpp-python"
                 )
             self._whispercpp_instance = Whisper(self.whispercpp_model)

@@ -169,6 +169,8 @@ class VoiceCog(commands.Cog):
             model_size=ai_config.WHISPER_MODEL,
             device=ai_config.WHISPER_DEVICE,
             compute_type=ai_config.WHISPER_COMPUTE_TYPE,
+            backend=ai_config.STT_BACKEND,
+            whispercpp_model=ai_config.STT_WHISPERCPP_MODEL,
         )
         # Фоновые задачи дежурства: {guild_id: asyncio.Task}
         self.duty_tasks: dict[int, asyncio.Task] = {}

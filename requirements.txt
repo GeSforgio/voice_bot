@@ -10,6 +10,11 @@ numpy>=1.24.0
 duckduckgo_search>=6.0.0
 tavily-python>=0.3.0
 
+# === STT бэкенд (опционально — можно удалить если не нужно) ===
+# whisper-cpp-python — лёгкий C++ бэкенд для whisper, меньше RAM
+# pip install whisper-cpp-python
+
+
 # === Text Normalizer (опционально — можно удалить если не нужно) ===
 runorm>=1.0
 torch>=2.0.0

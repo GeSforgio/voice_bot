@@ -16,6 +16,10 @@ WHISPER_MODEL = "base"         # размер модели: tiny, base, small, m
 WHISPER_DEVICE = "cpu"         # cpu или cuda
 WHISPER_COMPUTE_TYPE = "int8"  # int8, float16, float32 (на CPU — int8, на CUDA — float16)
 
+# === STT бэкенд ===
+STT_BACKEND = "faster-whisper"   # faster-whisper или whispercpp
+STT_WHISPERCPP_MODEL = "small"   # tiny, base, small (если бэкенд whispercpp)
+
 # === AI Response ===
 AI_MAX_TOKENS_VOICE = 400    # макс токенов для голосовых ответов (!скажи, !дежурь, !слушай)
 AI_MAX_TOKENS_CHAT = 1024      # макс токенов для текстового чата (!чат)

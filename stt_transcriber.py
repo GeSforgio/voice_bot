@@ -1,11 +1,15 @@
 """
-🎙️ Transcriber — faster-whisper wrapper с конвертацией аудио и VAD
+🎙️ Transcriber — faster-whisper / whisper.cpp wrapper с конвертацией аудио и VAD
 Вдохновлён Discorder (github.com/LaFa777/ai_slop_discord_voice_bot)
+
+Два бэкенда:
+- faster-whisper (по умолчанию) — Python-библиотека, VAD, beam_search
+- whisper.cpp — лёгкий C++ бэкенд, меньше RAM
 
 Особенности:
 - convert_audio: PCM s16le 48kHz stereo → float32 mono
 - transcribe: прямой проход numpy array (без temp-файлов)
-- VAD-фильтр: вырезает тишину, ускоряет распознавание
+- VAD-фильтр (только faster-whisper): вырезает тишину
 - Ленивая загрузка модели (грузится при первом transcribe)
 - Тайминги каждого этапа в логах
 """
@@ -22,38 +26,64 @@ def _log(tag: str, msg: str):
 
 
 class Transcriber:
-    """Умный transcriber: PCM → numpy → whisper с VAD"""
+    """Умный transcriber: PCM → numpy → STT.
+    Два бэкенда: faster-whisper (по умолчанию) или whisper.cpp.
+    """
 
     def __init__(
         self,
         model_size: str = "base",
         device: str = "cpu",
         compute_type: str = "int8",
+        backend: str = "faster-whisper",
+        whispercpp_model: str = "small",
     ):
         self.model_size = model_size
         self.device = device
         self.compute_type = compute_type
-        self._model = None
+        self.backend = backend
+        self.whispercpp_model = whispercpp_model
+        self._faster_model = None
+        self._whispercpp_instance = None
 
-    # ===================== Загрузка модели =====================
+    # ===================== Загрузка faster-whisper =====================
 
-    def _load(self) -> WhisperModel:
-        """Ленивая загрузка модели при первом transcribe"""
-        if self._model is None:
+    def _load_faster(self) -> WhisperModel:
+        """Ленивая загрузка faster-whisper при первом transcribe"""
+        if self._faster_model is None:
             t_start = time.time()
             _log(
                 "WHISPER",
-                f"Загружаю Whisper ({self.model_size}) "
+                f"Загружаю faster-whisper ({self.model_size}) "
                 f"на {self.device} ({self.compute_type})...",
             )
-            self._model = WhisperModel(
+            self._faster_model = WhisperModel(
                 self.model_size,
                 device=self.device,
                 compute_type=self.compute_type,
             )
             elapsed = time.time() - t_start
-            _log("WHISPER", f"Модель загружена за {elapsed:.1f}с")
-        return self._model
+            _log("WHISPER", f"faster-whisper загружен за {elapsed:.1f}с")
+        return self._faster_model
+
+    # ===================== Загрузка whisper.cpp =====================
+
+    def _load_whispercpp(self):
+        """Ленивая загрузка whisper.cpp при первом transcribe"""
+        if self._whispercpp_instance is None:
+            t_start = time.time()
+            _log("WHISPER", f"Загружаю whisper.cpp ({self.whispercpp_model})...")
+            try:
+                from whispercpp import Whisper
+            except ImportError:
+                raise ImportError(
+                    "whisper.cpp не установлен. "
+                    "Установи: pip install whisper-cpp-python"
+                )
+            self._whispercpp_instance = Whisper(self.whispercpp_model)
+            elapsed = time.time() - t_start
+            _log("WHISPER", f"whisper.cpp загружен за {elapsed:.1f}с")
+        return self._whispercpp_instance
 
     # ===================== Конвертация аудио =====================
 
@@ -80,15 +110,22 @@ class Transcriber:
     # ===================== Транскрипция =====================
 
     def transcribe(self, audio: np.ndarray, label: str = "") -> str:
+        """Транскрибировать float32 mono → текст.
+        Выбирает бэкенд по self.backend.
         """
-        Транскрибировать float32 mono массив → текст
+        if self.backend == "whispercpp":
+            return self._transcribe_whispercpp(audio, label)
+        return self._transcribe_faster(audio, label)
 
+    def _transcribe_faster(self, audio: np.ndarray, label: str = "") -> str:
+        """
+        faster-whisper:
         - Даунсемпл 48→16kHz (каждый 3-й сэмпл)
-        - VAD фильтр: отсекает тишину, лучше качество
-        - beam_size=5: баланс скорость/точность
+        - VAD фильтр: отсекает тишину
+        - beam_size=5
         """
         t_start = time.time()
-        model = self._load()
+        model = self._load_faster()
         # 48 → 16 кГц (пропускаем 2 из 3)
         audio_16k = audio[::3]
         audio_len_s = len(audio) / 48000
@@ -103,5 +140,29 @@ class Transcriber:
         elapsed = time.time() - t_start
         tag = f"WHISPER{label}"
         status = f"→ \"{text[:80]}\"" if text else "(пусто)"
-        _log(tag, f"Транскрипция: {audio_len_s:.1f}с аудио за {elapsed:.1f}с {status}")
+        _log(tag, f"faster-whisper: {audio_len_s:.1f}с аудио за {elapsed:.1f}с {status}")
         return text
+
+    def _transcribe_whispercpp(self, audio: np.ndarray, label: str = "") -> str:
+        """
+        whisper.cpp (через whisper-cpp-python):
+        - Свой внутренний ресемплинг (не надо 48→16k руками)
+        - Свой VAD / детектор тишины
+        - Меньше RAM, быстрее на CPU
+        """
+        t_start = time.time()
+        model = self._load_whispercpp()
+        audio_len_s = len(audio) / 48000
+
+        result = model.transcribe(audio)
+        text = result.text.strip()
+        elapsed = time.time() - t_start
+        tag = f"WHISPER{label}"
+        status = f"→ \"{text[:80]}\"" if text else "(пусто)"
+        _log(tag, f"whisper.cpp: {audio_len_s:.1f}с аудио за {elapsed:.1f}с {status}")
+        return text
+
+    @property
+    def current_backend(self) -> str:
+        """Вернуть имя активного бэкенда"""
+        return self.backend

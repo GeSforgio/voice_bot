@@ -15,6 +15,8 @@
 """
 
 import time
+import os
+import tempfile
 import numpy as np
 from faster_whisper import WhisperModel
 
@@ -72,7 +74,8 @@ class Transcriber:
         """Ленивая загрузка whisper.cpp при первом transcribe"""
         if self._whispercpp_instance is None:
             t_start = time.time()
-            _log("WHISPER", f"Загружаю whisper.cpp ({self.whispercpp_model})...")
+            model_path = self._ensure_whispercpp_model()
+            _log("WHISPER", f"Загружаю whisper.cpp ({model_path})...")
             try:
                 from whisper_cpp_python import Whisper
             except ImportError:
@@ -80,10 +83,42 @@ class Transcriber:
                     "whisper_cpp_python не установлен. "
                     "Установи: pip install whisper-cpp-python"
                 )
-            self._whispercpp_instance = Whisper(self.whispercpp_model)
+            self._whispercpp_instance = Whisper(
+                model_path,
+                n_threads=4,
+            )
             elapsed = time.time() - t_start
             _log("WHISPER", f"whisper.cpp загружен за {elapsed:.1f}с")
         return self._whispercpp_instance
+
+    def _ensure_whispercpp_model(self) -> str:
+        """Проверить/скачать GGUF-модель whisper.cpp в .whisper_cache"""
+        model_name = self.whispercpp_model  # "tiny", "base", "small"
+        cache_dir = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), ".whisper_cache"
+        )
+        os.makedirs(cache_dir, exist_ok=True)
+
+        # Пробуем GGUF сначала, потом ggml (старый формат)
+        for model_file in [f"ggml-{model_name}.bin", f"ggml-{model_name}-gguf.bin"]:
+            local_path = os.path.join(cache_dir, model_file)
+            if os.path.isfile(local_path):
+                return local_path
+
+        # GGUF не нашли — качаем
+        model_file = f"ggml-{model_name}.bin"
+        local_path = os.path.join(cache_dir, model_file)
+        url = f"https://huggingface.co/ggerganov/whisper.cpp/resolve/main/{model_file}"
+
+        _log("WHISPER", f"Скачиваю модель: {url}")
+        try:
+            import urllib.request
+            urllib.request.urlretrieve(url, local_path)
+            _log("WHISPER", f"Модель скачана: {local_path}")
+        except Exception as e:
+            raise RuntimeError(f"Не удалось скачать модель whisper.cpp: {e}")
+
+        return local_path
 
     # ===================== Конвертация аудио =====================
 
@@ -145,17 +180,42 @@ class Transcriber:
 
     def _transcribe_whispercpp(self, audio: np.ndarray, label: str = "") -> str:
         """
-        whisper.cpp (через whisper-cpp-python):
-        - Свой внутренний ресемплинг (не надо 48→16k руками)
-        - Свой VAD / детектор тишины
+        whisper.cpp (через whisper_cpp_python):
+        - Ресемплинг 48→16kHz
+        - Пишет временный WAV, транскрайбит
         - Меньше RAM, быстрее на CPU
         """
         t_start = time.time()
         model = self._load_whispercpp()
         audio_len_s = len(audio) / 48000
 
-        result = model.transcribe(audio)
-        text = result.text.strip()
+        # Ресемпл 48→16kHz
+        audio_16k = audio[::3]
+
+        # Сохраняем во временный WAV (whisper.cpp может не принять numpy напрямую)
+        tmp_wav = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+        tmp_path = tmp_wav.name
+        tmp_wav.close()
+
+        try:
+            # int16 mono 16kHz
+            samples = (audio_16k * 32767).clip(-32768, 32767).astype(np.int16)
+            import wave
+            with wave.open(tmp_path, "w") as wf:
+                wf.setnchannels(1)
+                wf.setsampwidth(2)
+                wf.setframerate(16000)
+                wf.writeframes(samples.tobytes())
+
+            result = model.transcribe(tmp_path, language="ru")
+            text = result.text.strip()
+        except Exception as e:
+            _log("WHISPER", f"whisper.cpp error: {e}")
+            text = ""
+        finally:
+            if os.path.exists(tmp_path):
+                os.unlink(tmp_path)
+
         elapsed = time.time() - t_start
         tag = f"WHISPER{label}"
         status = f"→ \"{text[:80]}\"" if text else "(пусто)"

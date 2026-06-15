@@ -12,7 +12,7 @@ AI_API_KEY = os.getenv("AI_API_KEY", "")
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "")
 
 # === Whisper STT ===
-WHISPER_MODEL = "base"         # размер модели: tiny, base, small, medium, large-v3
+WHISPER_MODEL = "small"         # размер модели: tiny, base, small, medium, large-v3
 WHISPER_DEVICE = "cpu"         # cpu или cuda
 WHISPER_COMPUTE_TYPE = "int8"  # int8, float16, float32 (на CPU — int8, на CUDA — float16)
 
